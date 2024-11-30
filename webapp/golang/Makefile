@@ -6,4 +6,4 @@ app: *.go go.mod go.sum
 deploy:
 	go build -o app
 	sudo systemctl restart nginx
-	sudo systemctl restart app
+	sudo systemctl restart isu-go
