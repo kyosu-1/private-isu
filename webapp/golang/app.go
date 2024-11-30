@@ -11,11 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"path/filepath"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -238,6 +238,15 @@ func imageURL(p Post) string {
 	return "/image/" + strconv.Itoa(p.ID) + ext
 }
 
+func handleError(w http.ResponseWriter, err error, msg string) bool {
+	if err != nil {
+		log.Printf("%s: %v", msg, err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return true
+	}
+	return false
+}
+
 func isLogin(u User) bool {
 	return u.ID != 0
 }
@@ -389,21 +398,127 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
+// 最新の投稿を取得する関数
+func getLatestPosts(limit int) ([]Post, error) {
+	var posts []Post
+	query := `
+		SELECT 
+			p.id, p.user_id, p.body, p.mime, p.created_at,
+			u.id, u.account_name, u.del_flg, u.passhash, u.authority, u.created_at
+		FROM posts p
+		JOIN users u ON p.user_id = u.id
+		WHERE p.del_flg = 0
+		ORDER BY p.created_at DESC
+		LIMIT ?`
+	err := db.Select(&posts, query, limit)
+	return posts, err
+}
+
+// 投稿IDのリストからコメントを取得する関数
+func getCommentsForPosts(postIDs []int, limitPerPost int) ([]Comment, error) {
+	if len(postIDs) == 0 {
+		return nil, nil
+	}
+
+	// ウィンドウ関数を使用して各投稿ごとに最大 limitPerPost 件のコメントを取得
+	query := `
+		SELECT id, post_id, user_id, comment, created_at
+		FROM (
+			SELECT 
+				c.id, c.post_id, c.user_id, c.comment, c.created_at,
+				ROW_NUMBER() OVER (PARTITION BY c.post_id ORDER BY c.created_at DESC) AS rn
+			FROM comments c
+			WHERE c.post_id IN (?) 
+		) sub
+		WHERE sub.rn <= ?
+		ORDER BY sub.post_id, sub.created_at DESC`
+
+	query, args, err := sqlx.In(query, postIDs, limitPerPost)
+	if err != nil {
+		return nil, err
+	}
+	query = db.Rebind(query)
+
+	var comments []Comment
+	err = db.Select(&comments, query, args...)
+	return comments, err
+}
+
+// ユーザーIDのリストからユーザー情報を取得する関数
+func getUsersByIDs(userIDs []int) ([]User, error) {
+	if len(userIDs) == 0 {
+		return nil, nil
+	}
+
+	query, args, err := sqlx.In("SELECT id, account_name FROM users WHERE id IN (?)", userIDs)
+	if err != nil {
+		return nil, err
+	}
+	query = db.Rebind(query)
+
+	var users []User
+	err = db.Select(&users, query, args...)
+	return users, err
+}
+
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC")
-	if err != nil {
-		log.Print(err)
+	// 最新の20件の投稿を取得（JOINでユーザー情報を取得）
+	posts, err := getLatestPosts(postsPerPage)
+	if handleError(w, err, "Failed to get latest posts") {
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
-	if err != nil {
-		log.Print(err)
+	// 投稿IDのリストを収集
+	postIDs := make([]int, len(posts))
+	for i, post := range posts {
+		postIDs[i] = post.ID
+	}
+
+	// 各投稿に対して最大3件の最新コメントを取得
+	comments, err := getCommentsForPosts(postIDs, 3)
+	if handleError(w, err, "Failed to get comments for posts") {
 		return
+	}
+
+	// コメントユーザーIDのリストを収集
+	commentUserIDsMap := make(map[int]struct{})
+	for _, comment := range comments {
+		commentUserIDsMap[comment.UserID] = struct{}{}
+	}
+	commentUserIDs := make([]int, 0, len(commentUserIDsMap))
+	for uid := range commentUserIDsMap {
+		commentUserIDs = append(commentUserIDs, uid)
+	}
+
+	// コメントユーザーの取得
+	commentUsers, err := getUsersByIDs(commentUserIDs)
+	if handleError(w, err, "Failed to get users for comments") {
+		return
+	}
+
+	// コメントユーザーのマッピング
+	commentUserMap := make(map[int]User)
+	for _, user := range commentUsers {
+		commentUserMap[user.ID] = user
+	}
+
+	// コメントにユーザー情報を割り当て
+	for i := range comments {
+		if user, exists := commentUserMap[comments[i].UserID]; exists {
+			comments[i].User = user
+		}
+	}
+
+	// 投稿にコメントをマッピング
+	postCommentsMap := make(map[int][]Comment)
+	for _, comment := range comments {
+		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
+	}
+	for i := range posts {
+		posts[i].Comments = postCommentsMap[posts[i].ID]
+		posts[i].CommentCount = len(postCommentsMap[posts[i].ID])
 	}
 
 	fmap := template.FuncMap{
