@@ -404,7 +404,9 @@ func getLatestPosts(limit int) ([]Post, error) {
 	query := `
 		SELECT 
 			p.id, p.user_id, p.body, p.mime, p.created_at,
-			u.id, u.account_name, u.del_flg, u.passhash, u.authority, u.created_at
+			u.id AS "user.id", u.account_name AS "user.account_name", 
+			u.del_flg AS "user.del_flg", u.passhash AS "user.passhash", 
+			u.authority AS "user.authority", u.created_at AS "user.created_at"
 		FROM posts p
 		JOIN users u ON p.user_id = u.id
 		WHERE u.del_flg = 0
