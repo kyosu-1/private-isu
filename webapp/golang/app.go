@@ -407,7 +407,7 @@ func getLatestPosts(limit int) ([]Post, error) {
 			u.id, u.account_name, u.del_flg, u.passhash, u.authority, u.created_at
 		FROM posts p
 		JOIN users u ON p.user_id = u.id
-		WHERE p.del_flg = 0
+		WHERE u.del_flg = 0
 		ORDER BY p.created_at DESC
 		LIMIT ?`
 	err := db.Select(&posts, query, limit)
