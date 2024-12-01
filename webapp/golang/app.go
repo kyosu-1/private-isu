@@ -555,56 +555,18 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	posts := []Post{}
+	results := []Post{}
 
-	err = db.Select(&posts, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
+	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC", user.ID)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	postIDs := []int{}
-	for _, post := range posts {
-		postIDs = append(postIDs, post.ID)
-	}
-
-	comments, err := getCommentsForPosts(postIDs, 3)
-	if handleError(w, err, "Failed to get comments for posts") {
+	posts, err := makePosts(results, getCSRFToken(r), false)
+	if err != nil {
+		log.Print(err)
 		return
-	}
-
-	commentUserIDsMap := make(map[int]struct{})
-	for _, comment := range comments {
-		commentUserIDsMap[comment.UserID] = struct{}{}
-	}
-	commentUserIDs := make([]int, 0, len(commentUserIDsMap))
-	for uid := range commentUserIDsMap {
-		commentUserIDs = append(commentUserIDs, uid)
-	}
-
-	commentUsers, err := getUsersByIDs(commentUserIDs)
-	if handleError(w, err, "Failed to get users for comments") {
-		return
-	}
-
-	commentUserMap := make(map[int]User)
-	for _, user := range commentUsers {
-		commentUserMap[user.ID] = user
-	}
-
-	for i := range comments {
-		if user, exists := commentUserMap[comments[i].UserID]; exists {
-			comments[i].User = user
-		}
-	}
-
-	postCommentsMap := make(map[int][]Comment)
-	for _, comment := range comments {
-		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
-	}
-	for i := range posts {
-		posts[i].Comments = postCommentsMap[posts[i].ID]
-		posts[i].CommentCount = len(postCommentsMap[posts[i].ID])
 	}
 
 	commentCount := 0
@@ -614,7 +576,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	postIDs = []int{}
+	postIDs := []int{}
 	err = db.Select(&postIDs, "SELECT `id` FROM `posts` WHERE `user_id` = ?", user.ID)
 	if err != nil {
 		log.Print(err)
