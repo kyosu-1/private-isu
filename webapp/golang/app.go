@@ -518,9 +518,11 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 	for _, comment := range comments {
 		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
 	}
+	csrfToken := getCSRFToken(r)
 	for i := range posts {
 		posts[i].Comments = postCommentsMap[posts[i].ID]
 		posts[i].CommentCount = len(postCommentsMap[posts[i].ID])
+		posts[i].CSRFToken = csrfToken
 	}
 
 	fmap := template.FuncMap{
@@ -537,7 +539,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		Me        User
 		CSRFToken string
 		Flash     string
-	}{posts, me, getCSRFToken(r), getFlash(w, r, "notice")})
+	}{posts, me, csrfToken, getFlash(w, r, "notice")})
 }
 
 func getAccountName(w http.ResponseWriter, r *http.Request) {
