@@ -644,20 +644,76 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 最新の投稿を取得
 	results := []Post{}
-	err = db.Select(&results, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC", t.Format(ISO8601Format))
+	err = db.Select(&results, `
+		SELECT 
+			p.id, p.user_id, p.body, p.mime, p.created_at,
+			u.id AS "user.id", u.account_name AS "user.account_name", 
+			u.del_flg AS "user.del_flg", u.passhash AS "user.passhash", 
+			u.authority AS "user.authority", u.created_at AS "user.created_at"
+		FROM posts p
+		JOIN users u ON p.user_id = u.id
+		WHERE p.created_at <= ? AND u.del_flg = 0
+		ORDER BY p.created_at DESC
+		LIMIT ?`, t.Format(ISO8601Format), postsPerPage)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
-	if err != nil {
-		log.Print(err)
+	// 投稿IDのリストを収集
+	postIDs := make([]int, len(results))
+	for i, post := range results {
+		postIDs[i] = post.ID
+	}
+
+	// 各投稿に対して最大3件の最新コメントを取得
+	comments, err := getCommentsForPosts(postIDs, 3)
+	if handleError(w, err, "Failed to get comments for posts") {
 		return
 	}
 
-	if len(posts) == 0 {
+	// コメントユーザーIDのリストを収集
+	commentUserIDsMap := make(map[int]struct{})
+	for _, comment := range comments {
+		commentUserIDsMap[comment.UserID] = struct{}{}
+	}
+	commentUserIDs := make([]int, 0, len(commentUserIDsMap))
+	for uid := range commentUserIDsMap {
+		commentUserIDs = append(commentUserIDs, uid)
+	}
+
+	// コメントユーザーの取得
+	commentUsers, err := getUsersByIDs(commentUserIDs)
+	if handleError(w, err, "Failed to get users for comments") {
+		return
+	}
+
+	// コメントユーザーのマッピング
+	commentUserMap := make(map[int]User)
+	for _, user := range commentUsers {
+		commentUserMap[user.ID] = user
+	}
+
+	// コメントにユーザー情報を割り当て
+	for i := range comments {
+		if user, exists := commentUserMap[comments[i].UserID]; exists {
+			comments[i].User = user
+		}
+	}
+
+	// 投稿にコメントをマッピング
+	postCommentsMap := make(map[int][]Comment)
+	for _, comment := range comments {
+		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
+	}
+	for i := range results {
+		results[i].Comments = postCommentsMap[results[i].ID]
+		results[i].CommentCount = len(postCommentsMap[results[i].ID])
+	}
+
+	if len(results) == 0 {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
@@ -669,7 +725,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 	template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
 		getTemplPath("posts.html"),
 		getTemplPath("post.html"),
-	)).Execute(w, posts)
+	)).Execute(w, results)
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
