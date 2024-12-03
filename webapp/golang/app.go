@@ -408,7 +408,7 @@ func getLatestPosts(limit int) ([]Post, error) {
 			u.id AS "user.id", u.account_name AS "user.account_name", 
 			u.del_flg AS "user.del_flg", u.passhash AS "user.passhash", 
 			u.authority AS "user.authority", u.created_at AS "user.created_at"
-		FROM posts p
+		FROM posts p USE INDEX (idx_created_at)
 		JOIN users u ON p.user_id = u.id
 		WHERE u.del_flg = 0
 		ORDER BY p.created_at DESC
@@ -668,7 +668,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 			u.id AS "user.id", u.account_name AS "user.account_name", 
 			u.del_flg AS "user.del_flg", u.passhash AS "user.passhash", 
 			u.authority AS "user.authority", u.created_at AS "user.created_at"
-		FROM posts p
+		FROM posts p USE INDEX (idx_created_at)
 		JOIN users u ON p.user_id = u.id
 		WHERE p.created_at <= ? AND u.del_flg = 0
 		ORDER BY p.created_at DESC
