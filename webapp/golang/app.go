@@ -16,7 +16,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"bytes"
+
+	"crypto/sha512"
+	"encoding/hex"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -25,14 +27,51 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
 	"github.com/kaz/pprotein/integration/standalone"
-	"crypto/sha512"
-	"encoding/hex"
 )
 
 var (
 	db                *sqlx.DB
 	store             *gsm.MemcacheStore
 	compiledTemplates = make(map[string]*template.Template)
+)
+
+var (
+	fmap = template.FuncMap{
+		"imageURL": imageURL,
+	}
+	indexTemplate = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("index.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	loginTemplate = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("login.html"),
+	))
+	registerTemplate = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("register.html"),
+	))
+	postsTemplate = template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	postIdTemplate = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("post_id.html"),
+		getTemplPath("post.html"),
+	))
+	accountNameTemplate = template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("user.html"),
+		getTemplPath("posts.html"),
+		getTemplPath("post.html"),
+	))
+	adminBannedTemplate = template.Must(template.ParseFiles(
+		getTemplPath("layout.html"),
+		getTemplPath("banned.html"),
+	))
 )
 
 const (
@@ -81,16 +120,6 @@ func init() {
 	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-
-	templates := []string{"layout.html", "login.html", "register.html", "index.html", "post.html", "posts.html", "user.html", "banned.html"}
-	for _, tmpl := range templates {
-		compiledTemplates[tmpl] = template.Must(template.New(tmpl).Funcs(template.FuncMap{
-			"imageURL": imageURL,
-		}).ParseFiles(getTemplPath(tmpl)))
-	}
-
-	// debug log
-	log.Println("templates:", compiledTemplates)
 }
 
 func dbInitialize() {
@@ -277,20 +306,6 @@ func getTemplPath(filename string) string {
 	return path.Join("templates", filename)
 }
 
-func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
-	log.Println("テンプレート実行開始:", tmpl)
-	var buf bytes.Buffer
-	err := compiledTemplates[tmpl].Execute(&buf, data)
-	if err != nil {
-		log.Printf("テンプレート実行エラー: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	log.Println("テンプレート出力:", buf.String())
-	buf.WriteTo(w)
-	log.Println("テンプレート実行完了:", tmpl)
-}
-
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	dbInitialize()
 	go func() {
@@ -309,7 +324,7 @@ func getLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, "login.html", struct {
+	loginTemplate.Execute(w, struct {
 		Me    User
 		Flash string
 	}{me, getFlash(w, r, "notice")})
@@ -345,7 +360,7 @@ func getRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, "register.html", struct {
+	registerTemplate.Execute(w, struct {
 		Me    User
 		Flash string
 	}{User{}, getFlash(w, r, "notice")})
@@ -535,9 +550,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		posts[i].CSRFToken = csrfToken
 	}
 
-	log.Println("rendering index.html")
-
-	renderTemplate(w, "index.html", struct {
+	indexTemplate.Execute(w, struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
@@ -621,7 +634,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	renderTemplate(w, "user.html", struct {
+	accountNameTemplate.Execute(w, struct {
 		Posts          []Post
 		User           User
 		PostCount      int
@@ -715,7 +728,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, "posts.html", results)
+	postsTemplate.Execute(w, results)
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
@@ -739,7 +752,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	renderTemplate(w, "post_id.html", struct {
+	postIdTemplate.Execute(w, struct {
 		Post Post
 		Me   User
 	}{*post, me})
@@ -920,7 +933,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	renderTemplate(w, "banned.html", struct {
+	adminBannedTemplate.Execute(w, struct {
 		Users     []User
 		Me        User
 		CSRFToken string
