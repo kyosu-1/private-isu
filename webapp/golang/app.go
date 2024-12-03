@@ -2,6 +2,7 @@ package main
 
 import (
 	crand "crypto/rand"
+	"database/sql"
 	"fmt"
 	"html/template"
 	"io"
@@ -780,25 +781,16 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results := []Post{}
-	err = db.Select(&results, "SELECT * FROM `posts` WHERE `id` = ?", pid)
+	post, err := makePost(pid, getCSRFToken(r))
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), true)
-	if err != nil {
-		log.Print(err)
-		return
-	}
-
-	if len(posts) == 0 {
+	if post == nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
-
-	p := posts[0]
 
 	me := getSessionUser(r)
 
@@ -813,7 +805,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 	)).Execute(w, struct {
 		Post Post
 		Me   User
-	}{p, me})
+	}{*post, me})
 }
 
 func postIndex(w http.ResponseWriter, r *http.Request) {
@@ -1035,6 +1027,50 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/admin/banned", http.StatusFound)
+}
+
+func makePost(postID int, csrfToken string) (*Post, error) {
+	var post Post
+
+	// PostとUserをJOINして取得
+	query := `
+		SELECT 
+			p.id, p.user_id, p.body, p.mime, p.created_at,
+			u.id AS "user.id", u.account_name AS "user.account_name", 
+			u.del_flg AS "user.del_flg", u.passhash AS "user.passhash", 
+			u.authority AS "user.authority", u.created_at AS "user.created_at"
+		FROM posts p
+		JOIN users u ON p.user_id = u.id
+		WHERE p.id = ? AND u.del_flg = 0`
+	err := db.Get(&post, query, postID)
+	if err != nil {
+		// not foundならnilを返す
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// コメントとユーザーをJOINして取得
+	commentsQuery := `
+		SELECT 
+			c.id, c.post_id, c.user_id, c.comment, c.created_at,
+			u.id AS "user.id", u.account_name AS "user.account_name"
+		FROM comments c
+		JOIN users u ON c.user_id = u.id
+		WHERE c.post_id = ?
+		ORDER BY c.created_at DESC`
+	var comments []Comment
+	err = db.Select(&comments, commentsQuery, postID)
+	if err != nil {
+		return nil, err
+	}
+
+	post.Comments = comments
+	post.CommentCount = len(comments)
+	post.CSRFToken = csrfToken
+
+	return &post, nil
 }
 
 func main() {
