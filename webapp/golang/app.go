@@ -87,6 +87,9 @@ func init() {
 			"imageURL": imageURL,
 		}).ParseFiles(getTemplPath(tmpl)))
 	}
+
+	// debug log
+	log.Println("templates:", compiledTemplates)
 }
 
 func dbInitialize() {
@@ -523,6 +526,12 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		posts[i].CommentCount = len(postCommentsMap[posts[i].ID])
 		posts[i].CSRFToken = csrfToken
 	}
+
+	// debug log
+
+	log.Println("posts in getIndex:", posts)
+	// debug renderTemplate
+	log.Println("rendering index.html")
 
 	renderTemplate(w, "index.html", struct {
 		Posts     []Post
