@@ -1,7 +1,4 @@
 {{ define "content" }}
-<div class="debug-message">
-  <p>テンプレートがレンダリングされています</p>
-</div>
 <div class="isu-submit">
   <form method="post" action="/" enctype="multipart/form-data">
     <div class="isu-form">
@@ -22,11 +19,7 @@
   </form>
 </div>
 
-<div class="isu-posts">
-  {{ range .Posts }}
-  {{ template "post.html" . }}
-  {{ end }}
-</div>
+{{ template "posts.html" .Posts }}
 
 <div id="isu-post-more">
   <button id="isu-post-more-btn">もっと見る</button>
