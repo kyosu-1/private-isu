@@ -277,10 +277,14 @@ func getTemplPath(filename string) string {
 }
 
 func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
+	log.Println("テンプレート実行開始:", tmpl)
 	err := compiledTemplates[tmpl].Execute(w, data)
 	if err != nil {
+		log.Printf("テンプレート実行エラー: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
+	log.Println("テンプレート実行完了:", tmpl)
 }
 
 func getInitialize(w http.ResponseWriter, r *http.Request) {
@@ -527,10 +531,6 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		posts[i].CSRFToken = csrfToken
 	}
 
-	// debug log
-
-	log.Println("posts in getIndex:", posts)
-	// debug renderTemplate
 	log.Println("rendering index.html")
 
 	renderTemplate(w, "index.html", struct {
