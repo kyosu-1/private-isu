@@ -29,8 +29,9 @@ import (
 )
 
 var (
-	db    *sqlx.DB
-	store *gsm.MemcacheStore
+	db                *sqlx.DB
+	store             *gsm.MemcacheStore
+	compiledTemplates = make(map[string]*template.Template)
 )
 
 const (
@@ -79,6 +80,13 @@ func init() {
 	memcacheClient := memcache.New(memdAddr)
 	store = gsm.NewMemcacheStore(memcacheClient, "iscogram_", []byte("sendagaya"))
 	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
+
+	templates := []string{"layout.html", "login.html", "register.html", "index.html", "post.html", "posts.html", "user.html", "banned.html"}
+	for _, tmpl := range templates {
+		compiledTemplates[tmpl] = template.Must(template.New(tmpl).Funcs(template.FuncMap{
+			"imageURL": imageURL,
+		}).ParseFiles(getTemplPath(tmpl)))
+	}
 }
 
 func dbInitialize() {
@@ -114,9 +122,6 @@ func validateUser(accountName, password string) bool {
 		regexp.MustCompile(`\A[0-9a-zA-Z_]{6,}\z`).MatchString(password)
 }
 
-// 今回のGo実装では言語側のエスケープの仕組みが使えないのでOSコマンドインジェクション対策できない
-// 取り急ぎPHPのescapeshellarg関数を参考に自前で実装
-// cf: http://jp2.php.net/manual/ja/function.escapeshellarg.php
 func escapeshellarg(arg string) string {
 	return "'" + strings.Replace(arg, "'", "'\\''", -1) + "'"
 }
@@ -268,6 +273,13 @@ func getTemplPath(filename string) string {
 	return path.Join("templates", filename)
 }
 
+func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
+	err := compiledTemplates[tmpl].Execute(w, data)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 func getInitialize(w http.ResponseWriter, r *http.Request) {
 	dbInitialize()
 	go func() {
@@ -286,10 +298,7 @@ func getLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("login.html")),
-	).Execute(w, struct {
+	renderTemplate(w, "login.html", struct {
 		Me    User
 		Flash string
 	}{me, getFlash(w, r, "notice")})
@@ -325,10 +334,7 @@ func getRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("register.html")),
-	).Execute(w, struct {
+	renderTemplate(w, "register.html", struct {
 		Me    User
 		Flash string
 	}{User{}, getFlash(w, r, "notice")})
@@ -353,7 +359,6 @@ func postRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exists := 0
-	// ユーザーが存在しない場合はエラーになるのでエラーチェックはしない
 	db.Get(&exists, "SELECT 1 FROM users WHERE `account_name` = ?", accountName)
 
 	if exists == 1 {
@@ -394,7 +399,6 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
-// 最新の投稿を取得する関数
 func getLatestPosts(limit int) ([]Post, error) {
 	var posts []Post
 	query := `
@@ -412,13 +416,11 @@ func getLatestPosts(limit int) ([]Post, error) {
 	return posts, err
 }
 
-// 投稿IDのリストからコメントを取得する関数
 func getCommentsForPosts(postIDs []int, limitPerPost int) ([]Comment, error) {
 	if len(postIDs) == 0 {
 		return nil, nil
 	}
 
-	// ウィンドウ関数を使用して各投稿ごとに最大 limitPerPost 件のコメントを取得
 	query := `
 		SELECT id, post_id, user_id, comment, created_at
 		FROM (
@@ -442,7 +444,6 @@ func getCommentsForPosts(postIDs []int, limitPerPost int) ([]Comment, error) {
 	return comments, err
 }
 
-// ユーザーIDのリストからユーザー情報を取得する関数
 func getUsersByIDs(userIDs []int) ([]User, error) {
 	if len(userIDs) == 0 {
 		return nil, nil
@@ -459,7 +460,6 @@ func getUsersByIDs(userIDs []int) ([]User, error) {
 	return users, err
 }
 
-// コメントとユーザー情報を取得し、マッピングする関数
 func fetchCommentsAndUsers(postIDs []int, limitPerPost int) (map[int][]Comment, error) {
 	comments, err := getCommentsForPosts(postIDs, limitPerPost)
 	if err != nil {
@@ -524,16 +524,7 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		posts[i].CSRFToken = csrfToken
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("index.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	renderTemplate(w, "index.html", struct {
 		Posts     []Post
 		Me        User
 		CSRFToken string
@@ -603,7 +594,6 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 		}
 		placeholder := strings.Join(s, ", ")
 
-		// convert []int -> []interface{}
 		args := make([]interface{}, len(postIDs))
 		for i, v := range postIDs {
 			args[i] = v
@@ -618,16 +608,7 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("user.html"),
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	renderTemplate(w, "user.html", struct {
 		Posts          []Post
 		User           User
 		PostCount      int
@@ -655,7 +636,6 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 最新の投稿を取得
 	results := []Post{}
 	err = db.Select(&results, `
 		SELECT 
@@ -673,19 +653,16 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 投稿IDのリストを収集
 	postIDs := make([]int, len(results))
 	for i, post := range results {
 		postIDs[i] = post.ID
 	}
 
-	// 各投稿に対して最大3件の最新コメントを取得
 	comments, err := getCommentsForPosts(postIDs, 3)
 	if handleError(w, err, "Failed to get comments for posts") {
 		return
 	}
 
-	// コメントユーザーIDのリストを収集
 	commentUserIDsMap := make(map[int]struct{})
 	for _, comment := range comments {
 		commentUserIDsMap[comment.UserID] = struct{}{}
@@ -695,26 +672,22 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		commentUserIDs = append(commentUserIDs, uid)
 	}
 
-	// コメントユーザーの取得
 	commentUsers, err := getUsersByIDs(commentUserIDs)
 	if handleError(w, err, "Failed to get users for comments") {
 		return
 	}
 
-	// コメントユーザーのマッピング
 	commentUserMap := make(map[int]User)
 	for _, user := range commentUsers {
 		commentUserMap[user.ID] = user
 	}
 
-	// コメントにユーザー情報を割り当て
 	for i := range comments {
 		if user, exists := commentUserMap[comments[i].UserID]; exists {
 			comments[i].User = user
 		}
 	}
 
-	// 投稿にコメントをマッピング
 	postCommentsMap := make(map[int][]Comment)
 	for _, comment := range comments {
 		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
@@ -729,14 +702,7 @@ func getPosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("posts.html").Funcs(fmap).ParseFiles(
-		getTemplPath("posts.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, results)
+	renderTemplate(w, "posts.html", results)
 }
 
 func getPostsID(w http.ResponseWriter, r *http.Request) {
@@ -760,15 +726,7 @@ func getPostsID(w http.ResponseWriter, r *http.Request) {
 
 	me := getSessionUser(r)
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
-	}
-
-	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("post_id.html"),
-		getTemplPath("post.html"),
-	)).Execute(w, struct {
+	renderTemplate(w, "post_id.html", struct {
 		Post Post
 		Me   User
 	}{*post, me})
@@ -799,7 +757,6 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 	mime := ""
 	ext := ""
 	if file != nil {
-		// 投稿のContent-Typeからファイルのタイプを決定する
 		contentType := header.Header["Content-Type"][0]
 		if strings.Contains(contentType, "jpeg") {
 			mime = "image/jpeg"
@@ -854,7 +811,6 @@ func postIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ../public/image/ に画像を保存する
 	filepath := filepath.Join(ImageDir, fmt.Sprintf("%d.%s", pid, ext))
 	err = os.WriteFile(filepath, filedata, 0644)
 	if err != nil {
@@ -894,8 +850,6 @@ func getImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// この時も画像をImageDirに保存する
-	// 次回以降はnginxから直接配信する
 	filepath := filepath.Join(ImageDir, fmt.Sprintf("%d.%s", pid, ext))
 	err = os.WriteFile(filepath, post.Imgdata, 0644)
 	if err != nil {
@@ -953,10 +907,7 @@ func getAdminBanned(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	template.Must(template.ParseFiles(
-		getTemplPath("layout.html"),
-		getTemplPath("banned.html")),
-	).Execute(w, struct {
+	renderTemplate(w, "banned.html", struct {
 		Users     []User
 		Me        User
 		CSRFToken string
@@ -998,7 +949,6 @@ func postAdminBanned(w http.ResponseWriter, r *http.Request) {
 func makePost(postID int, csrfToken string) (*Post, error) {
 	var post Post
 
-	// PostとUserをJOINして取得
 	query := `
 		SELECT 
 			p.id, p.user_id, p.body, p.mime, p.created_at,
@@ -1010,14 +960,12 @@ func makePost(postID int, csrfToken string) (*Post, error) {
 		WHERE p.id = ? AND u.del_flg = 0`
 	err := db.Get(&post, query, postID)
 	if err != nil {
-		// not foundならnilを返す
 		if err == sql.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	// コメントとユーザーをJOINして取得
 	commentsQuery := `
 		SELECT 
 			c.id, c.post_id, c.user_id, c.comment, c.created_at,
