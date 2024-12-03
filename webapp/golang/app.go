@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"bytes"
 
 	"github.com/bradfitz/gomemcache/memcache"
 	gsm "github.com/bradleypeabody/gorilla-sessions-memcache"
@@ -278,12 +279,15 @@ func getTemplPath(filename string) string {
 
 func renderTemplate(w http.ResponseWriter, tmpl string, data interface{}) {
 	log.Println("テンプレート実行開始:", tmpl)
-	err := compiledTemplates[tmpl].Execute(w, data)
+	var buf bytes.Buffer
+	err := compiledTemplates[tmpl].Execute(&buf, data)
 	if err != nil {
 		log.Printf("テンプレート実行エラー: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	log.Println("テンプレート出力:", buf.String())
+	buf.WriteTo(w)
 	log.Println("テンプレート実行完了:", tmpl)
 }
 
