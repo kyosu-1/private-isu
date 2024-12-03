@@ -464,28 +464,13 @@ func getUsersByIDs(userIDs []int) ([]User, error) {
 	return users, err
 }
 
-func getIndex(w http.ResponseWriter, r *http.Request) {
-	me := getSessionUser(r)
-
-	// 最新の20件の投稿を取得（JOINでユーザー情報を取得）
-	posts, err := getLatestPosts(postsPerPage)
-	if handleError(w, err, "Failed to get latest posts") {
-		return
+// コメントとユーザー情報を取得し、マッピングする関数
+func fetchCommentsAndUsers(postIDs []int, limitPerPost int) (map[int][]Comment, error) {
+	comments, err := getCommentsForPosts(postIDs, limitPerPost)
+	if err != nil {
+		return nil, err
 	}
 
-	// 投稿IDのリストを収集
-	postIDs := make([]int, len(posts))
-	for i, post := range posts {
-		postIDs[i] = post.ID
-	}
-
-	// 各投稿に対して最大3件の最新コメントを取得
-	comments, err := getCommentsForPosts(postIDs, 3)
-	if handleError(w, err, "Failed to get comments for posts") {
-		return
-	}
-
-	// コメントユーザーIDのリストを収集
 	commentUserIDsMap := make(map[int]struct{})
 	for _, comment := range comments {
 		commentUserIDsMap[comment.UserID] = struct{}{}
@@ -495,30 +480,48 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		commentUserIDs = append(commentUserIDs, uid)
 	}
 
-	// コメントユーザーの取得
 	commentUsers, err := getUsersByIDs(commentUserIDs)
-	if handleError(w, err, "Failed to get users for comments") {
-		return
+	if err != nil {
+		return nil, err
 	}
 
-	// コメントユーザーのマッピング
 	commentUserMap := make(map[int]User)
 	for _, user := range commentUsers {
 		commentUserMap[user.ID] = user
 	}
 
-	// コメントにユーザー情報を割り当て
 	for i := range comments {
 		if user, exists := commentUserMap[comments[i].UserID]; exists {
 			comments[i].User = user
 		}
 	}
 
-	// 投稿にコメントをマッピング
 	postCommentsMap := make(map[int][]Comment)
 	for _, comment := range comments {
 		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
 	}
+
+	return postCommentsMap, nil
+}
+
+func getIndex(w http.ResponseWriter, r *http.Request) {
+	me := getSessionUser(r)
+
+	posts, err := getLatestPosts(postsPerPage)
+	if handleError(w, err, "Failed to get latest posts") {
+		return
+	}
+
+	postIDs := make([]int, len(posts))
+	for i, post := range posts {
+		postIDs[i] = post.ID
+	}
+
+	postCommentsMap, err := fetchCommentsAndUsers(postIDs, 3)
+	if handleError(w, err, "Failed to fetch comments and users") {
+		return
+	}
+
 	csrfToken := getCSRFToken(r)
 	for i := range posts {
 		posts[i].Comments = postCommentsMap[posts[i].ID]
@@ -559,55 +562,23 @@ func getAccountName(w http.ResponseWriter, r *http.Request) {
 	}
 
 	posts := []Post{}
-
 	err = db.Select(&posts, "SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC LIMIT ?", user.ID, postsPerPage)
 	if err != nil {
 		log.Print(err)
 		return
 	}
 
-	postIDs := []int{}
-	for _, post := range posts {
-		postIDs = append(postIDs, post.ID)
+	postIDs := make([]int, len(posts))
+	for i, post := range posts {
+		postIDs[i] = post.ID
 	}
 
-	comments, err := getCommentsForPosts(postIDs, 3)
-	if handleError(w, err, "Failed to get comments for posts") {
+	postCommentsMap, err := fetchCommentsAndUsers(postIDs, 3)
+	if handleError(w, err, "Failed to fetch comments and users") {
 		return
-	}
-
-	commentUserIDsMap := make(map[int]struct{})
-	for _, comment := range comments {
-		commentUserIDsMap[comment.UserID] = struct{}{}
-	}
-	commentUserIDs := make([]int, 0, len(commentUserIDsMap))
-	for uid := range commentUserIDsMap {
-		commentUserIDs = append(commentUserIDs, uid)
-	}
-
-	commentUsers, err := getUsersByIDs(commentUserIDs)
-	if handleError(w, err, "Failed to get users for comments") {
-		return
-	}
-
-	commentUserMap := make(map[int]User)
-	for _, user := range commentUsers {
-		commentUserMap[user.ID] = user
-	}
-
-	for i := range comments {
-		if user, exists := commentUserMap[comments[i].UserID]; exists {
-			comments[i].User = user
-		}
-	}
-
-	postCommentsMap := make(map[int][]Comment)
-	for _, comment := range comments {
-		postCommentsMap[comment.PostID] = append(postCommentsMap[comment.PostID], comment)
 	}
 
 	csrfToken := getCSRFToken(r)
-
 	for i := range posts {
 		posts[i].Comments = postCommentsMap[posts[i].ID]
 		posts[i].CommentCount = len(postCommentsMap[posts[i].ID])
